@@ -219,6 +219,8 @@ describe('server-beta Postgres platform source scoping', () => {
       'auth bug',
       7,
       'cursor',
+      // Remote-store fork: repo-name metadata filter, null = no narrowing.
+      null,
     ]);
   });
 });

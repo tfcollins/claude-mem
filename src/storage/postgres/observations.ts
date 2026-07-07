@@ -136,6 +136,11 @@ export class PostgresObservationRepository {
     teamId: string;
     serverSessionId?: string | null;
     limit?: number;
+    // Repo-name filter on metadata->>'project'. The tenant projectId is one
+    // UUID shared by every machine of a single operator; the per-directory
+    // identity clients stamp into metadata is what keeps one repo's memory
+    // out of another repo's context.
+    project?: string | null;
   }): Promise<PostgresObservation[]> {
     const result = await this.client.query<ObservationRow>(
       `
@@ -143,10 +148,11 @@ export class PostgresObservationRepository {
         WHERE project_id = $1
           AND team_id = $2
           AND ($3::text IS NULL OR server_session_id = $3)
+          AND ($5::text IS NULL OR metadata->>'project' = $5)
         ORDER BY created_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.serverSessionId ?? null, input.limit ?? 100]
+      [input.projectId, input.teamId, input.serverSessionId ?? null, input.limit ?? 100, input.project ?? null]
     );
     return result.rows.map(mapObservationRow);
   }
@@ -157,6 +163,8 @@ export class PostgresObservationRepository {
     query: string;
     limit?: number;
     platformSource?: string | null;
+    // Repo-name filter on metadata->>'project' (see listByProject).
+    project?: string | null;
   }): Promise<PostgresObservation[]> {
     const platformSource = normalizePlatformSourceOrNull(input.platformSource);
     const result = await this.client.query<ObservationRow>(
@@ -169,6 +177,7 @@ export class PostgresObservationRepository {
         WHERE observations.project_id = $1
           AND observations.team_id = $2
           AND observations.content_search @@ websearch_to_tsquery('english', $3)
+          AND ($6::text IS NULL OR observations.metadata->>'project' = $6)
           AND (
             $5::text IS NULL
             OR server_sessions.platform_source = $5
@@ -190,7 +199,7 @@ export class PostgresObservationRepository {
         ORDER BY ts_rank(observations.content_search, websearch_to_tsquery('english', $3)) DESC, observations.updated_at DESC
         LIMIT $4
       `,
-      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource]
+      [input.projectId, input.teamId, input.query, input.limit ?? 20, platformSource, input.project ?? null]
     );
     return result.rows.map(mapObservationRow);
   }

@@ -11,8 +11,10 @@
 //   2. Find or create a "local-hook" team and project so the api_key has
 //      proper tenant scope.
 //   3. Generate a `cmem_<random>` key, hash with SHA-256, insert into
-//      `api_keys` with the scopes hooks need: events:write, sessions:write,
-//      observations:read, jobs:read.
+//      `api_keys` with the scopes the Postgres /v1 routes actually check:
+//      memories:write, memories:read (requirePostgresServerAuth matches
+//      these exactly — the historical events:write/sessions:write/
+//      observations:read/jobs:read set could not call any /v1 route).
 //   4. Persist the plaintext key to ~/.claude-mem/settings.json under
 //      `CLAUDE_MEM_SERVER_API_KEY` (the new canonical key after the
 //      server-beta → server rename). Reads in `runtime-selector.ts`
@@ -39,10 +41,8 @@ const LOCAL_HOOK_PROJECT_NAME = 'local-hook-project';
 const LOCAL_HOOK_ACTOR_ID = 'system:local-hook-bootstrap';
 
 export const HOOK_API_KEY_SCOPES: readonly string[] = Object.freeze([
-  'events:write',
-  'sessions:write',
-  'observations:read',
-  'jobs:read',
+  'memories:write',
+  'memories:read',
 ]);
 
 export interface BootstrapResult {

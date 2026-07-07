@@ -15,7 +15,7 @@ import {
 
 function printServerUsage(): void {
   console.error(`Usage: ${styleText('bold', 'npx claude-mem server <command>')}`);
-  console.error('Commands: start, stop, restart, status, api-key create|list|revoke, keys rotate, worker start, jobs status|failed|retry|cancel');
+  console.error('Commands: start, stop, restart, status, api-key create|list|revoke, keys rotate|mint, worker start, jobs status|failed|retry|cancel');
 }
 
 function runWorkerLifecycleCommand(command: string): boolean {
@@ -96,8 +96,12 @@ export async function runServerCommand(argv: string[] = []): Promise<void> {
       await runServerKeysRotateCommand();
       return;
     }
+    if (keysCommand === 'mint') {
+      await runServerKeysMintCommand();
+      return;
+    }
     console.error(styleText('red', `Unknown server keys subcommand: ${keysCommand ?? '(none)'}`));
-    console.error('Usage: npx claude-mem server keys rotate');
+    console.error('Usage: npx claude-mem server keys rotate|mint');
     process.exit(1);
   }
 
@@ -152,6 +156,31 @@ async function runServerKeysRotateCommand(): Promise<void> {
     teamId: result.teamId,
     projectId: result.projectId,
     settingsPath,
+  }, null, 2));
+}
+
+// `keys mint` provisions an ADDITIONAL key against the shared
+// local-hook team/project without revoking anything — one key per client
+// machine of the same operator, all landing in the same tenant project.
+// Unlike rotate, it never touches the local settings.json: it runs on the
+// server host (or any host that can reach Postgres), and the key is pasted
+// into the *client* machine's install. The raw key is printed exactly once.
+async function runServerKeysMintCommand(): Promise<void> {
+  if (!process.env.CLAUDE_MEM_SERVER_DATABASE_URL) {
+    console.error(styleText('red', 'Cannot mint server API key: CLAUDE_MEM_SERVER_DATABASE_URL is not set.'));
+    console.error('Configure Postgres first, then re-run this command.');
+    process.exit(1);
+  }
+  const { bootstrapServerApiKey } = await import(
+    '../../services/hooks/server-bootstrap.js'
+  );
+  const result = await bootstrapServerApiKey();
+  console.log(JSON.stringify({
+    minted: true,
+    apiKey: result.rawKey, // shown ONCE — store it now
+    apiKeyId: result.apiKeyId,
+    teamId: result.teamId,
+    projectId: result.projectId,
   }, null, 2));
 }
 

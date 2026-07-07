@@ -75,6 +75,13 @@ const EVENT_QUERY_SCHEMA = z.object({
   wait: z.union([z.literal('true'), z.literal('false')]).optional(),
 });
 
+const MEMORIES_LIST_QUERY_SCHEMA = z.object({
+  projectId: z.string().min(1),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  project: z.string().min(1).optional(),
+  serverSessionId: z.string().min(1).optional(),
+});
+
 // `?wait=true` polls the outbox row until it reaches a terminal status
 // (`completed` / `failed` / `cancelled`). Hard-capped so a stuck provider can
 // never block an HTTP worker indefinitely; callers always get a response.
@@ -870,12 +877,17 @@ export class ServerV1PostgresRoutes implements RouteHandler {
 
     // POST /v1/memories — direct/manual observation insertion (compat alias).
     // MUST NOT call generator and MUST NOT create outbox rows.
+    // generationKey rides the observations table's partial-unique index
+    // (team_id, project_id, generation_key), so clients that retry a push
+    // (network flake, outbox replay) upsert into the same row instead of
+    // duplicating it.
     app.post('/v1/memories', writeAuth, this.handleCreate(
       z.object({
         projectId: z.string().min(1),
         serverSessionId: z.string().min(1).nullable().optional(),
         kind: z.string().min(1).optional(),
         content: z.string().min(1),
+        generationKey: z.string().min(1).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
       }),
       async (req, res, body) => {
@@ -888,6 +900,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           serverSessionId: body.serverSessionId ?? null,
           kind: body.kind ?? 'manual',
           content: body.content,
+          generationKey: body.generationKey ?? null,
           metadata: body.metadata ?? {},
         };
         try {
@@ -903,6 +916,60 @@ export class ServerV1PostgresRoutes implements RouteHandler {
       },
     ));
 
+    // GET /v1/memories — recent observations, newest first. `project` narrows
+    // to one repo's rows via metadata->>'project' (the tenant projectId is
+    // shared by all of an operator's machines; the repo name is the identity
+    // that matters for context injection).
+    app.get('/v1/memories', readAuth, this.asyncHandler(async (req, res) => {
+      const parsedQuery = MEMORIES_LIST_QUERY_SCHEMA.safeParse(req.query);
+      if (!parsedQuery.success) {
+        res.status(400).json({ error: 'ValidationError', issues: parsedQuery.error.issues });
+        return;
+      }
+      const teamId = this.requireTeamId(req, res);
+      if (!teamId) return;
+      const { projectId, limit, project, serverSessionId } = parsedQuery.data;
+      if (!this.ensureProjectAllowed(req, res, projectId)) return;
+      let results;
+      try {
+        const repo = new PostgresObservationRepository(this.options.pool);
+        results = await repo.listByProject({
+          projectId,
+          teamId,
+          serverSessionId: serverSessionId ?? null,
+          limit,
+          project: project ?? null,
+        });
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.warn('SYSTEM', 'memory.list failed', { requestId: req.requestId ?? null }, err);
+        this.handleDbError(err, res, 'memory.list');
+        return;
+      }
+      await this.auditWrite(req, 'observation.read', null, projectId, {
+        mode: 'recent',
+        limit,
+        project: project ?? null,
+        resultCount: results.length,
+        observationIds: results.map(o => o.id),
+      });
+      res.status(200).json({ memories: results.map(serializeObservation) });
+    }));
+
+    // GET /v1/whoami — the caller's resolved auth context. Lets an installer
+    // turn "server URL + API key" into the tenant projectId without the
+    // operator copying UUIDs around.
+    app.get('/v1/whoami', readAuth, this.asyncHandler(async (req, res) => {
+      const teamId = this.requireTeamId(req, res);
+      if (!teamId) return;
+      res.status(200).json({
+        teamId,
+        projectId: req.authContext?.projectId ?? null,
+        scopes: req.authContext?.scopes ?? [],
+        apiKeyId: req.authContext?.apiKeyId ?? null,
+      });
+    }));
+
     // Phase 8 — full-text search over generated observations using the GIN
     // tsvector index. Results are ranked by ts_rank desc, then updated_at desc.
     // The MCP `observation_search` tool calls this endpoint via HTTP so the
@@ -913,6 +980,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(100).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        project: z.string().min(1).nullable().optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -928,6 +996,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 20,
             platformSource,
+            project: body.project ?? null,
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
@@ -959,6 +1028,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
         query: z.string().min(1),
         limit: z.number().int().positive().max(50).optional(),
         platformSource: z.string().min(1).nullable().optional(),
+        project: z.string().min(1).nullable().optional(),
       }),
       async (req, res, body) => {
         const teamId = this.requireTeamId(req, res);
@@ -974,6 +1044,7 @@ export class ServerV1PostgresRoutes implements RouteHandler {
             query: body.query,
             limit: body.limit ?? 10,
             platformSource,
+            project: body.project ?? null,
           });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));
