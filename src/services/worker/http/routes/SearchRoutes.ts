@@ -368,7 +368,8 @@ export class SearchRoutes extends BaseRouteHandler {
   });
 
   private async buildSharedMemorySection(project: string): Promise<string | null> {
-    const reader = this.searchManager.getRemoteReader();
+    // Optional-call tolerates duck-typed SearchManager stubs in tests.
+    const reader = this.searchManager.getRemoteReader?.();
     if (!reader) return null;
     const rows = await reader.recentFromOtherMachines(project, 10);
     if (rows.length === 0) return null;

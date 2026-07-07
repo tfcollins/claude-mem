@@ -320,7 +320,7 @@ async function syncAndBroadcastObservations(
     // Remote-store fork: replicate to the shared server. Fire-and-forget —
     // local storage already succeeded, and the generationKey makes any retry
     // idempotent, so a failed push costs only cross-machine visibility.
-    dbManager.getRemoteSync()?.syncObservation(
+    dbManager.getRemoteSync?.()?.syncObservation(
       obsId,
       memorySessionId,
       session.project,
@@ -422,7 +422,7 @@ async function syncAndBroadcastSummary(
   });
 
   // Remote-store fork: replicate the summary too (see observation push above).
-  dbManager.getRemoteSync()?.syncSummary(
+  dbManager.getRemoteSync?.()?.syncSummary(
     result.summaryId,
     memorySessionId,
     session.project,
