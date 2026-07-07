@@ -29,6 +29,7 @@ ${styleText('bold', 'Install Commands')} (no Bun required):
   ${styleText('cyan', 'npx claude-mem install --disable-auto-memory')}   Explicitly disable Claude Code native auto-memory
   ${styleText('cyan', 'npx claude-mem install --runtime worker|server')}   Select runtime non-interactively (server brings up Docker pg+redis, generates an API key, injects the IDE MCP config)
   ${styleText('cyan', 'npx claude-mem install --runtime server --server-url <url>')}   Point the server runtime at a specific base URL
+  ${styleText('cyan', 'npx claude-mem install --remote-url <url> --remote-api-key <key>')}   Remote store: keep the local worker but share memory via a central claude-mem server
   ${styleText('cyan', 'npx claude-mem repair')}                Repair runtime (re-runs Bun/uv setup and bun install in plugin cache)
   ${styleText('cyan', 'npx claude-mem update')}               Update to latest version
   ${styleText('cyan', 'npx claude-mem uninstall')}            Remove plugin and configs
@@ -69,6 +70,8 @@ function parseInstallOptions(argv: string[]): InstallOptions {
       model: { type: 'string' },
       runtime: { type: 'string' },
       'server-url': { type: 'string' },
+      'remote-url': { type: 'string' },
+      'remote-api-key': { type: 'string' },
       'no-auto-start': { type: 'boolean' },
       'disable-auto-memory': { type: 'boolean' },
     },
@@ -95,6 +98,8 @@ function parseInstallOptions(argv: string[]): InstallOptions {
     disableAutoMemory: values['disable-auto-memory'] === true,
     runtime: runtime as InstallOptions['runtime'],
     serverUrl: flag('server-url'),
+    remoteUrl: flag('remote-url'),
+    remoteApiKey: flag('remote-api-key'),
   };
 }
 
