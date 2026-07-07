@@ -1,7 +1,7 @@
 {
-  "name": "claude-mem",
+  "name": "@tfcollins/claude-mem",
   "version": "13.10.2",
-  "description": "Memory compression system for Claude Code - persist context across sessions",
+  "description": "Memory compression system for Claude Code - persist context across sessions (fork: shared remote store for multi-machine use)",
   "keywords": [
     "claude",
     "claude-code",
@@ -19,11 +19,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/thedotmack/claude-mem.git"
+    "url": "https://github.com/tfcollins/claude-mem.git"
   },
-  "homepage": "https://github.com/thedotmack/claude-mem#readme",
+  "homepage": "https://github.com/tfcollins/claude-mem#readme",
   "bugs": {
-    "url": "https://github.com/thedotmack/claude-mem/issues"
+    "url": "https://github.com/tfcollins/claude-mem/issues"
   },
   "type": "module",
   "bin": {

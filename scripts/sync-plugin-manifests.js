@@ -27,7 +27,7 @@ function syncCodexPlugin(plugin, pkg) {
 
   return {
     ...plugin,
-    name: pkg.name,
+    name: unscopedName(pkg.name),
     version: pkg.version,
     description: pkg.description,
     homepage: pkg.homepage,
@@ -49,7 +49,7 @@ function syncCodexPlugin(plugin, pkg) {
 function syncClaudePlugin(plugin, pkg) {
   return {
     ...plugin,
-    name: pkg.name,
+    name: unscopedName(pkg.name),
     version: pkg.version,
     description: pkg.description,
     homepage: pkg.homepage,
@@ -61,6 +61,14 @@ function syncClaudePlugin(plugin, pkg) {
       name: normalizeAuthorName(pkg.author),
     },
   };
+}
+
+// Plugin manifests must keep the unscoped name: the installer registers the
+// plugin as 'claude-mem@thedotmack' and Claude Code matches that key against
+// the manifest's name. A scoped npm name (@tfcollins/claude-mem) would break
+// plugin loading, so only the npm package identity carries the scope.
+function unscopedName(name) {
+  return name.includes('/') ? name.split('/').pop() : name;
 }
 
 function normalizeAuthorName(author) {
