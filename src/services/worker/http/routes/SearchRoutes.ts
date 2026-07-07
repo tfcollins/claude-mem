@@ -305,6 +305,16 @@ export class SearchRoutes extends BaseRouteHandler {
       // Memoized: skips the COUNT(*) query once any project in the set has
       // observations. Hot-path: PostToolUse fires after every Read/Edit.
       if (!this.projectsHaveObservations(sessionStore, projects, platformSource)) {
+        // Remote-store fork: a brand-new machine has no LOCAL rows, but other
+        // machines may already have seeded this project on the shared server.
+        // Their memory beats the onboarding hint — that's the whole point of
+        // the shared store. Degrades to the hint when the server is off/empty.
+        const sharedSection = await this.buildSharedMemorySection(projects[projects.length - 1]);
+        if (sharedSection) {
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.send(`# claude-mem context${sharedSection}`);
+          return;
+        }
         const port = process.env.CLAUDE_MEM_WORKER_PORT ?? settings.CLAUDE_MEM_WORKER_PORT;
         const viewerUrl = `http://localhost:${port}`;
         const hintBody = WELCOME_HINT_TEMPLATE.replace('{viewer_url}', viewerUrl);
