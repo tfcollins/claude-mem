@@ -317,6 +317,25 @@ async function syncAndBroadcastObservations(
       }, error);
     });
 
+    // Remote-store fork: replicate to the shared server. Fire-and-forget —
+    // local storage already succeeded, and the generationKey makes any retry
+    // idempotent, so a failed push costs only cross-machine visibility.
+    dbManager.getRemoteSync?.()?.syncObservation(
+      obsId,
+      memorySessionId,
+      session.project,
+      obs,
+      session.lastPromptNumber,
+      result.createdAtEpoch,
+      session.platformSource
+    ).catch((error) => {
+      logger.error('REMOTE', `${agentName} remote store push failed, observation stays local-only`, {
+        obsId,
+        type: obs.type,
+        title: obs.title || '(untitled)'
+      }, error);
+    });
+
     broadcastObservation(worker, {
       id: obsId,
       memory_session_id: session.memorySessionId,
@@ -397,6 +416,22 @@ async function syncAndBroadcastSummary(
     });
   }).catch((error) => {
     logger.error('CHROMA', `${agentName} chroma sync failed, continuing without vector search`, {
+      summaryId: result.summaryId,
+      request: summaryForStore.request || '(no request)'
+    }, error);
+  });
+
+  // Remote-store fork: replicate the summary too (see observation push above).
+  dbManager.getRemoteSync?.()?.syncSummary(
+    result.summaryId,
+    memorySessionId,
+    session.project,
+    summaryForStore,
+    session.lastPromptNumber,
+    result.createdAtEpoch,
+    session.platformSource
+  ).catch((error) => {
+    logger.error('REMOTE', `${agentName} remote store push failed, summary stays local-only`, {
       summaryId: result.summaryId,
       request: summaryForStore.request || '(no request)'
     }, error);

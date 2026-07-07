@@ -511,7 +511,8 @@ export class WorkerService implements WorkerRef {
         this.dbManager.getSessionStore(),
         this.dbManager.getChromaSync(),
         formattingService,
-        timelineService
+        timelineService,
+        this.dbManager.getRemoteReader()
       );
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);

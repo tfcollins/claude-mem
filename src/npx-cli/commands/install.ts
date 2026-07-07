@@ -809,6 +809,15 @@ function resolveClaudeAuthMethod(): 'subscription' | 'api-key' | 'gateway' {
 const DEFAULT_SERVER_RUNTIME_BASE_URL = 'http://127.0.0.1:37877';
 
 async function promptRuntime(options: InstallOptions): Promise<RuntimeId> {
+  // Remote-store fork: `--remote-url` + `--remote-api-key` configure the
+  // worker runtime against a shared server, never the `server` runtime (that
+  // mode ships raw events for SERVER-side generation, which needs LLM keys on
+  // the server — exactly what the remote store avoids). No prompting.
+  if (options.remoteUrl !== undefined || options.remoteApiKey !== undefined) {
+    await setupRemoteStoreNonInteractive(options);
+    return 'worker';
+  }
+
   // #2543 — non-interactive runtime selection via `--runtime`. When the flag is
   // present we never prompt and never fall back to the worker path: we resolve
   // the requested runtime deterministically and, for the server runtime, plan +
@@ -880,6 +889,58 @@ async function setupServerRuntimeNonInteractive(options: InstallOptions): Promis
   );
 
   await maybeBootstrapServerApiKey();
+}
+
+// Remote-store fork: validate URL + key against the live server (GET
+// /v1/whoami), resolve the tenant projectId from the key, and persist the
+// worker-runtime remote-store settings. Fails the install loudly on any
+// mismatch — a silently mis-configured remote store would just degrade to
+// local-only and the operator would not notice until machine B saw nothing.
+async function setupRemoteStoreNonInteractive(options: InstallOptions): Promise<void> {
+  const remoteUrl = (options.remoteUrl ?? '').trim().replace(/\/+$/, '');
+  const remoteApiKey = (options.remoteApiKey ?? '').trim();
+  if (!remoteUrl || !remoteApiKey) {
+    log.error('Remote store requires BOTH --remote-url and --remote-api-key.');
+    process.exit(1);
+  }
+
+  let whoami: { teamId?: string; projectId?: string | null; scopes?: string[] };
+  try {
+    const response = await fetch(`${remoteUrl}/v1/whoami`, {
+      headers: { 'Authorization': `Bearer ${remoteApiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      log.error(`Remote store validation failed: ${remoteUrl}/v1/whoami returned HTTP ${response.status}. Check the API key (mint one on the server with \`claude-mem server keys mint\`).`);
+      process.exit(1);
+    }
+    whoami = await response.json() as typeof whoami;
+  } catch (error: unknown) {
+    log.error(`Cannot reach the remote store at ${remoteUrl}: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+
+  // Keys minted by `server keys mint` are scoped to the shared
+  // local-hook-project, so whoami carries the tenant projectId directly. A
+  // null projectId means a team-scoped key from some other provisioning path
+  // — refuse instead of guessing which project it should write into.
+  const projectId = whoami.projectId ?? null;
+  if (!projectId) {
+    log.error('This API key is not project-scoped. Use a key printed by `claude-mem server keys mint` (it is bound to the shared project), or set CLAUDE_MEM_SERVER_PROJECT_ID manually in ~/.claude-mem/settings.json.');
+    process.exit(1);
+  }
+
+  mergeSettings({
+    CLAUDE_MEM_RUNTIME: 'worker',
+    CLAUDE_MEM_REMOTE_STORE: 'true',
+    CLAUDE_MEM_SERVER_URL: remoteUrl,
+    CLAUDE_MEM_SERVER_API_KEY: remoteApiKey,
+    CLAUDE_MEM_SERVER_PROJECT_ID: projectId,
+    // Local vector DB is redundant next to server FTS and is the known RAM
+    // hog; remote-store clients run SQLite-FTS-only locally.
+    CLAUDE_MEM_CHROMA_ENABLED: 'false',
+  });
+  log.info(`Remote store configured: ${remoteUrl} (project=${projectId.slice(0, 8)}…). Worker runtime keeps compression local on this machine's Claude auth.`);
 }
 
 async function maybeBootstrapServerApiKey(): Promise<void> {
@@ -1411,6 +1472,11 @@ export interface InstallOptions {
   runtime?: 'worker' | 'server' | 'server-beta';
   // Base URL the server runtime (and the injected IDE MCP config) targets.
   serverUrl?: string;
+  // Remote-store fork: point the LOCAL worker runtime at a shared claude-mem
+  // server (dual-write + read merge). Both flags travel together; the tenant
+  // projectId is resolved from the server via GET /v1/whoami.
+  remoteUrl?: string;
+  remoteApiKey?: string;
 }
 
 export async function runInstallCommand(options: InstallOptions = {}): Promise<void> {
