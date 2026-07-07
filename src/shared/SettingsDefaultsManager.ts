@@ -1,7 +1,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, hostname } from 'os';
 import { HOOK_TIMEOUTS, getTimeout } from './hook-constants.js';
 import { parseJsonWithBom, writeJsonFileAtomic } from './atomic-json.js';
 
@@ -86,6 +86,14 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_BETA_URL: string;
   CLAUDE_MEM_SERVER_BETA_API_KEY: string;
   CLAUDE_MEM_SERVER_BETA_PROJECT_ID: string;
+  // Remote-store fork: the worker keeps the default `worker` runtime (local
+  // SQLite + local generation on subscription auth) but ALSO pushes finished
+  // observations to a shared claude-mem server and merges its rows into
+  // reads. Reuses CLAUDE_MEM_SERVER_URL/_API_KEY/_PROJECT_ID for the target.
+  CLAUDE_MEM_REMOTE_STORE: string;
+  CLAUDE_MEM_REMOTE_READ_TIMEOUT_MS: string;
+  CLAUDE_MEM_REMOTE_WRITE_TIMEOUT_MS: string;
+  CLAUDE_MEM_MACHINE_ID: string;
 }
 
 export class SettingsDefaultsManager {
@@ -170,6 +178,10 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_BETA_URL: `http://127.0.0.1:${process.env.CLAUDE_MEM_SERVER_PORT ?? String(37877 + ((process.getuid?.() ?? 77) % 100))}`,  // Legacy server-beta runtime URL — UID-derived for multi-account isolation
     CLAUDE_MEM_SERVER_BETA_API_KEY: '',                     // Legacy local hook API key (read as fallback when CLAUDE_MEM_SERVER_API_KEY unset)
     CLAUDE_MEM_SERVER_BETA_PROJECT_ID: '',                  // Legacy Postgres project_id (read as fallback when CLAUDE_MEM_SERVER_PROJECT_ID unset)
+    CLAUDE_MEM_REMOTE_STORE: 'false',                       // 'true' = dual-write observations to the shared server + merge remote rows into reads
+    CLAUDE_MEM_REMOTE_READ_TIMEOUT_MS: '1500',              // Read-merge budget; on timeout reads silently fall back to local-only
+    CLAUDE_MEM_REMOTE_WRITE_TIMEOUT_MS: '10000',            // Push budget; writes are fire-and-forget so this never blocks a session
+    CLAUDE_MEM_MACHINE_ID: hostname(),                      // Provenance + read-side dedupe (skip rows this machine wrote)
   };
 
   static getAllDefaults(): SettingsDefaults {
