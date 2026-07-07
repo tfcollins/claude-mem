@@ -18,6 +18,7 @@ import {
 } from './search/index.js';
 import { ResultFormatter } from './search/ResultFormatter.js';
 import { ChromaUnavailableError } from './search/errors.js';
+import { RemoteReader, toObservationSearchResult } from './RemoteReader.js';
 
 /**
  * Telemetry envelope for search_performed (see docs/public/telemetry.mdx).
@@ -40,7 +41,8 @@ export class SearchManager {
     private sessionStore: SessionStore,
     private chromaSync: ChromaSync | null,
     private formatter: FormattingService,
-    private timelineService: TimelineService
+    private timelineService: TimelineService,
+    private remoteReader: RemoteReader | null = null
   ) {
     this.orchestrator = new SearchOrchestrator(
       sessionSearch,
@@ -51,6 +53,36 @@ export class SearchManager {
 
   getOrchestrator(): SearchOrchestrator {
     return this.orchestrator;
+  }
+
+  getRemoteReader(): RemoteReader | null {
+    return this.remoteReader;
+  }
+
+  /**
+   * Remote-store fork: rows other machines pushed to the shared server,
+   * shaped like local search results. Rows written by THIS machine are
+   * skipped — their local copies are already in every local result set,
+   * which makes machineId the dedupe key. Failures degrade to [] so search
+   * never gets slower than `readTimeoutMs` or breaks offline.
+   */
+  private async searchRemoteObservations(
+    query: string,
+    project: string | undefined,
+    limit: number
+  ): Promise<ObservationSearchResult[]> {
+    if (!this.remoteReader) return [];
+    try {
+      const rows = await this.remoteReader.search(query, project, limit);
+      return rows
+        .filter(row => row.metadata.record === 'observation')
+        .filter(row => row.metadata.machineId !== this.remoteReader!.getMachineId())
+        .map(toObservationSearchResult);
+    } catch (error) {
+      logger.debug('REMOTE', 'Remote search failed — results stay local-only', {},
+        error instanceof Error ? error : new Error(String(error)));
+      return [];
+    }
   }
 
   getFormatter(): FormattingService {
@@ -527,6 +559,13 @@ export class SearchManager {
       }
     }
 
+    // Remote-store fork: append other machines' observations from the shared
+    // server (machineId-filtered, so nothing local is duplicated).
+    if (searchObservations && query && this.remoteReader) {
+      const remote = await this.searchRemoteObservations(query, options.project, options.limit || 20);
+      observations = [...observations, ...remote];
+    }
+
     const totalResults = observations.length + sessions.length + prompts.length;
 
     // Telemetry envelope (search_performed): derive the strategy from the
@@ -886,6 +925,12 @@ export class SearchManager {
       } catch (ftsError) {
         logger.warn('SEARCH', 'FTS fallback failed for observations', {}, ftsError instanceof Error ? ftsError : undefined);
       }
+    }
+
+    // Remote-store fork: merge other machines' rows (see search()).
+    if (query && this.remoteReader) {
+      const remote = await this.searchRemoteObservations(query, options.project, options.limit || 20);
+      results = [...results, ...remote];
     }
 
     if (results.length === 0) {

@@ -5,6 +5,7 @@ import { SessionSearch } from '../sqlite/SessionSearch.js';
 import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { ChromaSync } from '../sync/ChromaSync.js';
 import { RemoteSync, loadRemoteStoreConfig } from '../sync/RemoteSync.js';
+import { RemoteReader } from './RemoteReader.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -16,6 +17,7 @@ export class DatabaseManager {
   private sessionSearch: SessionSearch | null = null;
   private chromaSync: ChromaSync | null = null;
   private remoteSync: RemoteSync | null = null;
+  private remoteReader: RemoteReader | null = null;
 
   async initialize(): Promise<void> {
     this.db = openConfiguredSqliteDatabase(DB_PATH);
@@ -34,6 +36,7 @@ export class DatabaseManager {
     const remoteConfig = loadRemoteStoreConfig(settings);
     if (remoteConfig) {
       this.remoteSync = new RemoteSync(remoteConfig);
+      this.remoteReader = new RemoteReader(remoteConfig);
       logger.info('DB', 'Remote store enabled — observations dual-write to shared server', {
         serverUrl: remoteConfig.serverUrl,
         machineId: remoteConfig.machineId,
@@ -46,6 +49,7 @@ export class DatabaseManager {
   async close(): Promise<void> {
     this.chromaSync = null;
     this.remoteSync = null;
+    this.remoteReader = null;
 
     this.sessionStore = null;
     this.sessionSearch = null;
@@ -77,6 +81,10 @@ export class DatabaseManager {
 
   getRemoteSync(): RemoteSync | null {
     return this.remoteSync;
+  }
+
+  getRemoteReader(): RemoteReader | null {
+    return this.remoteReader;
   }
 
   getConnection(): Database {

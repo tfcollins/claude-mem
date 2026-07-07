@@ -357,9 +357,44 @@ export class SearchRoutes extends BaseRouteHandler {
       });
     }
 
+    // Remote-store fork: append what OTHER machines learned about this
+    // project. Local rows are already in the timeline above; the reader
+    // filters by machineId and degrades to [] on any failure/timeout, so
+    // this adds at most readTimeoutMs and never breaks injection.
+    const sharedSection = await this.buildSharedMemorySection(primaryProject);
+
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.send(contextResult.text);
+    res.send(sharedSection ? `${contextResult.text}\n${sharedSection}` : contextResult.text);
   });
+
+  private async buildSharedMemorySection(project: string): Promise<string | null> {
+    const reader = this.searchManager.getRemoteReader();
+    if (!reader) return null;
+    const rows = await reader.recentFromOtherMachines(project, 10);
+    if (rows.length === 0) return null;
+
+    const lines: string[] = ['', '## Shared memory (other machines)', ''];
+    for (const row of rows) {
+      const m = row.metadata as Record<string, unknown>;
+      const machine = typeof m.machineId === 'string' ? m.machineId : 'unknown';
+      const epoch = typeof m.createdAtEpoch === 'number' ? m.createdAtEpoch : row.createdAtEpoch;
+      const date = epoch ? new Date(epoch).toISOString().slice(0, 10) : '';
+      if (m.record === 'summary') {
+        const request = typeof m.request === 'string' && m.request ? m.request : 'Session summary';
+        const completed = typeof m.completed === 'string' && m.completed ? ` — ${m.completed}` : '';
+        lines.push(`- ${date} [${machine}] (session) ${request}${completed}`);
+      } else {
+        const title = typeof m.title === 'string' && m.title ? m.title : row.content.split('\n')[0];
+        const subtitle = typeof m.subtitle === 'string' && m.subtitle ? ` — ${m.subtitle}` : '';
+        lines.push(`- ${date} [${machine}] ${title}${subtitle}`);
+        if (typeof m.narrative === 'string' && m.narrative) {
+          const narrative = m.narrative.length > 240 ? `${m.narrative.slice(0, 240)}…` : m.narrative;
+          lines.push(`  ${narrative}`);
+        }
+      }
+    }
+    return lines.join('\n');
+  }
 
   private handleSemanticContext = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const query = SearchRoutes.firstString(req.body?.q) ?? SearchRoutes.firstString(req.query.q) ?? '';
