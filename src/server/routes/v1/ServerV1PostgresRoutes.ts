@@ -16,7 +16,7 @@ import {
   type PostgresObservationGenerationJob,
 } from '../../../storage/postgres/generation-jobs.js';
 import { PostgresAuthRepository } from '../../../storage/postgres/auth.js';
-import { PostgresObservationRepository } from '../../../storage/postgres/observations.js';
+import { PostgresObservationRepository, type PostgresObservation } from '../../../storage/postgres/observations.js';
 import { PostgresProjectsRepository } from '../../../storage/postgres/projects.js';
 import { logger } from '../../../utils/logger.js';
 import { requirePostgresServerAuth } from '../../middleware/postgres-auth.js';
@@ -63,6 +63,10 @@ export interface ServerV1PostgresRoutesOptions {
   // pick up — never claim observations were generated.
   getEventQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
   getSummaryQueue?: () => ReturnType<ActiveServerQueueManager['getQueue']> | null;
+  // Fork — notified after a memory row is created via POST /v1/memories, so the
+  // viewer SSE shim can push it live to connected browsers. Fire-and-forget;
+  // must never affect the write response.
+  onMemoryCreated?: (observation: PostgresObservation) => void;
 }
 
 interface BatchPreValidationFailure {
@@ -907,6 +911,14 @@ export class ServerV1PostgresRoutes implements RouteHandler {
           const repo = new PostgresObservationRepository(this.options.pool);
           const observation = await repo.create(createInput);
           await this.auditWrite(req, 'memory.write', observation.id, observation.projectId);
+          // Fork — live-push to viewer SSE clients. Guarded so a broadcast bug
+          // can never turn a successful write into a 500.
+          try {
+            this.options.onMemoryCreated?.(observation);
+          } catch (broadcastError) {
+            logger.warn('SYSTEM', 'onMemoryCreated broadcast failed', { requestId: req.requestId ?? null },
+              broadcastError instanceof Error ? broadcastError : new Error(String(broadcastError)));
+          }
           res.status(201).json({ memory: serializeObservation(observation) });
         } catch (error) {
           const err = error instanceof Error ? error : new Error(String(error));

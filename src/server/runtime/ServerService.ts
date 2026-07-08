@@ -177,10 +177,14 @@ export class ServerService {
       },
     });
     server.registerRoutes(new ServerRuntimeInfoRoutes(this.graph));
+    // Fork — the viewer shim owns the SSE client registry; construct it first
+    // so /v1/memories writes can live-push new rows to connected browsers.
+    const viewerApi = new ViewerApiRoutes({ pool: this.graph.postgres.pool });
     const v1Routes = new ServerV1PostgresRoutes({
       pool: this.graph.postgres.pool,
       queueManager: this.graph.queueManager,
       authMode: this.graph.authMode === 'disabled' ? 'api-key' : this.graph.authMode,
+      onMemoryCreated: (observation) => viewerApi.broadcastMemory(observation),
     });
     server.registerRoutes(v1Routes);
 
@@ -206,7 +210,8 @@ export class ServerService {
     // memory instead of spinning on 404s. Registered before ServerViewerRoutes
     // so its API/SSE paths resolve ahead of the static handler. Unauthenticated
     // by design (the browser bundle sends no key); see ViewerApiRoutes.
-    server.registerRoutes(new ViewerApiRoutes({ pool: this.graph.postgres.pool }));
+    // Same instance wired to v1Routes.onMemoryCreated above for live updates.
+    server.registerRoutes(viewerApi);
 
     // #2552 — mount the Viewer UI static handler so the viewer loads on the
     // server runtime. Registered AFTER the /v1 and compat API routes so the
