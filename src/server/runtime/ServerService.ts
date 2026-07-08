@@ -21,6 +21,7 @@ import { SessionsObservationsAdapter } from '../compat/SessionsObservationsAdapt
 import { SessionsSummarizeAdapter } from '../compat/SessionsSummarizeAdapter.js';
 import { ActiveServerQueueManager } from './ActiveServerQueueManager.js';
 import { ServerViewerRoutes } from './ServerViewerRoutes.js';
+import { ViewerApiRoutes } from './ViewerApiRoutes.js';
 import type { ServerServiceGraph, ServerQueueLaneMetric } from './types.js';
 
 // Phase 1d retains the persisted runtime literal `'server-beta'`. Renaming the
@@ -199,6 +200,13 @@ export class ServerService {
       endSession: v1Routes.getEndSessionService(),
       authMode: compatAuthMode,
     }));
+
+    // Fork — read-only /api/* + /stream compatibility shim so the bundled
+    // viewer (built for the worker's /api routes) renders the shared Postgres
+    // memory instead of spinning on 404s. Registered before ServerViewerRoutes
+    // so its API/SSE paths resolve ahead of the static handler. Unauthenticated
+    // by design (the browser bundle sends no key); see ViewerApiRoutes.
+    server.registerRoutes(new ViewerApiRoutes({ pool: this.graph.postgres.pool }));
 
     // #2552 — mount the Viewer UI static handler so the viewer loads on the
     // server runtime. Registered AFTER the /v1 and compat API routes so the
