@@ -78,8 +78,33 @@ export interface ViewerApiRoutesOptions {
 
 export class ViewerApiRoutes implements RouteHandler {
   private tenant: Tenant | null = null;
+  // Connected viewer SSE clients. Live memory writes fan out to these as the
+  // new_observation / new_summary frames the bundle already handles, so an
+  // open viewer updates without a refresh.
+  private readonly clients = new Set<Response>();
 
   constructor(private readonly options: ViewerApiRoutesOptions) {}
+
+  // Called by the /v1/memories write path (wired in ServerService) whenever a
+  // memory row is created. Fire-and-forget; a broadcast failure must never
+  // affect the write. Single-user deploy = one tenant, but guard on the
+  // resolved tenant anyway so a foreign-tenant write never leaks into the view.
+  broadcastMemory(row: PostgresObservation): void {
+    if (this.clients.size === 0) return;
+    if (this.tenant && row.projectId !== this.tenant.projectId) return;
+    const record = (row.metadata as Record<string, unknown> | null)?.record;
+    const event = record === 'summary'
+      ? { type: 'new_summary', summary: toViewerSummary(row) }
+      : { type: 'new_observation', observation: toViewerObservation(row) };
+    this.broadcast(event);
+  }
+
+  private broadcast(event: Record<string, unknown>): void {
+    const frame = `data: ${JSON.stringify({ ...event, timestamp: nowEpoch() })}\n\n`;
+    for (const client of this.clients) {
+      try { client.write(frame); } catch { this.clients.delete(client); }
+    }
+  }
 
   setupRoutes(app: Application): void {
     app.get('/api/observations', this.asyncHandler((req, res) => this.handleFeed(req, res, 'observation')));
@@ -171,11 +196,17 @@ export class ViewerApiRoutes implements RouteHandler {
       send({ type: 'processing_status', isProcessing: false, queueDepth: 0, timestamp: nowEpoch() });
     })();
 
+    // Register for live broadcasts (new_observation / new_summary).
+    this.clients.add(res);
+
     const keepalive = setInterval(() => {
       // Comment frame keeps the connection alive without triggering onmessage.
       res.write(': ping\n\n');
     }, SSE_KEEPALIVE_MS);
-    req.on('close', () => clearInterval(keepalive));
+    req.on('close', () => {
+      clearInterval(keepalive);
+      this.clients.delete(res);
+    });
   }
 
   // Resolve (projectId, teamId) for the single bootstrap tenant. Never caches a
