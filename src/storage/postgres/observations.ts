@@ -203,6 +203,72 @@ export class PostgresObservationRepository {
     );
     return result.rows.map(mapObservationRow);
   }
+
+  // Read-only feed for the server-beta viewer shim (src/server/runtime/
+  // ViewerApiRoutes). `record` filters on metadata->>'record' ('observation'
+  // | 'summary'), the stable discriminator across write paths (kind is not).
+  // Returns limit+1 rows so the caller can compute hasMore without a COUNT.
+  async listForViewer(input: {
+    projectId: string;
+    teamId: string;
+    record?: string | null;
+    project?: string | null;
+    offset?: number;
+    limit?: number;
+  }): Promise<{ rows: PostgresObservation[]; hasMore: boolean }> {
+    const limit = input.limit ?? 20;
+    const offset = input.offset ?? 0;
+    const result = await this.client.query<ObservationRow>(
+      `
+        SELECT * FROM observations
+        WHERE project_id = $1
+          AND team_id = $2
+          AND ($3::text IS NULL OR metadata->>'record' = $3)
+          AND ($4::text IS NULL OR metadata->>'project' = $4)
+        ORDER BY created_at DESC
+        OFFSET $5
+        LIMIT $6
+      `,
+      [input.projectId, input.teamId, input.record ?? null, input.project ?? null, offset, limit + 1]
+    );
+    const rows = result.rows.map(mapObservationRow);
+    const hasMore = rows.length > limit;
+    return { rows: hasMore ? rows.slice(0, limit) : rows, hasMore };
+  }
+
+  // Repo-name catalog for the viewer's project filter dropdown. "projects"
+  // here are the per-directory repo names in metadata->>'project', NOT the
+  // tenant project_id.
+  async projectCatalog(input: {
+    projectId: string;
+    teamId: string;
+  }): Promise<{ projects: string[]; sources: string[]; projectsBySource: Record<string, string[]> }> {
+    const result = await this.client.query<{ project: string | null; source: string | null }>(
+      `
+        SELECT DISTINCT metadata->>'project' AS project, metadata->>'platformSource' AS source
+        FROM observations
+        WHERE project_id = $1 AND team_id = $2 AND metadata->>'project' IS NOT NULL
+      `,
+      [input.projectId, input.teamId]
+    );
+    const projects = new Set<string>();
+    const sources = new Set<string>();
+    const bySource: Record<string, Set<string>> = {};
+    for (const row of result.rows) {
+      if (!row.project) continue;
+      projects.add(row.project);
+      const source = row.source || 'claude';
+      sources.add(source);
+      (bySource[source] ??= new Set<string>()).add(row.project);
+    }
+    return {
+      projects: [...projects].sort(),
+      sources: [...sources].sort(),
+      projectsBySource: Object.fromEntries(
+        Object.entries(bySource).map(([source, names]) => [source, [...names].sort()])
+      ),
+    };
+  }
 }
 
 export class PostgresObservationSourcesRepository {
