@@ -6,6 +6,7 @@ import { openConfiguredSqliteDatabase } from '../sqlite/connection.js';
 import { ChromaSync } from '../sync/ChromaSync.js';
 import { RemoteSync, loadRemoteStoreConfig } from '../sync/RemoteSync.js';
 import { RemoteReader } from './RemoteReader.js';
+import { CloudSync } from '../sync/CloudSync.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
@@ -18,14 +19,19 @@ export class DatabaseManager {
   private chromaSync: ChromaSync | null = null;
   private remoteSync: RemoteSync | null = null;
   private remoteReader: RemoteReader | null = null;
+  private cloudSync: CloudSync | null = null;
 
   async initialize(): Promise<void> {
     this.db = openConfiguredSqliteDatabase(DB_PATH);
 
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+
+    // The launch schema is SyncHub-native. SessionStore marks any pre-launch
+    // local corpus as a nonqueued baseline once; only subsequent writes enter
+    // the canonical v2 outbox.
     this.sessionStore = new SessionStore(this.db);
     this.sessionSearch = new SessionSearch(this.db);
 
-    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     const chromaEnabled = settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
     if (chromaEnabled) {
       this.chromaSync = new ChromaSync('claude-mem');
@@ -43,6 +49,17 @@ export class DatabaseManager {
       });
     }
 
+    // Cloud sync is active iff token, user id, and Hub URL are all non-empty.
+    // Inactive installs get null so the write-site `getCloudSync()?.notify()`
+    // nudges are free no-ops.
+    if (
+      settings.CLAUDE_MEM_CLOUD_SYNC_TOKEN !== '' &&
+      settings.CLAUDE_MEM_CLOUD_SYNC_USER_ID !== '' &&
+      settings.CLAUDE_MEM_CLOUD_SYNC_HUB_URL.trim() !== ''
+    ) {
+      this.cloudSync = new CloudSync(this.db, settings);
+    }
+
     logger.info('DB', 'Database initialized (shared connection)');
   }
 
@@ -50,6 +67,9 @@ export class DatabaseManager {
     this.chromaSync = null;
     this.remoteSync = null;
     this.remoteReader = null;
+
+    this.cloudSync?.stop();
+    this.cloudSync = null;
 
     this.sessionStore = null;
     this.sessionSearch = null;
@@ -85,6 +105,10 @@ export class DatabaseManager {
 
   getRemoteReader(): RemoteReader | null {
     return this.remoteReader;
+  }
+
+  getCloudSync(): CloudSync | null {
+    return this.cloudSync;
   }
 
   getConnection(): Database {
