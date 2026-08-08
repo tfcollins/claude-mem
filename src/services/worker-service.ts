@@ -9,7 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { getWorkerPort, getWorkerHost, fetchWithTimeout, resolveWorkerScriptPath } from '../shared/worker-utils.js';
 import { getCurrentWorkerPid, verifyRestartedWorker } from './restart-verify.js';
 import { runShutdownSequence, type WorkerShutdownReason } from './worker-shutdown.js';
-import { DATA_DIR, DB_PATH, ensureDir } from '../shared/paths.js';
+import { DATA_DIR, DB_PATH, ensureDir, pinProcessCwd } from '../shared/paths.js';
 import { HOOK_TIMEOUTS } from '../shared/hook-constants.js';
 import { getUptimeSeconds } from '../shared/uptime.js';
 import { SettingsDefaultsManager } from '../shared/SettingsDefaultsManager.js';
@@ -1422,6 +1422,14 @@ async function main() {
 
     case '--daemon':
     default: {
+      // Pin cwd to DATA_DIR before anything else: left alone, this process
+      // keeps whatever cwd its launching session had (often an ephemeral git
+      // worktree) for its entire daemon lifetime. If that directory is later
+      // deleted, every subsequent spawn() this daemon makes (e.g. launching
+      // the claude CLI) fails with an ENOENT misattributed to the spawned
+      // command rather than the real cause — the daemon's own missing cwd.
+      pinProcessCwd();
+
       // Duplicate gate, ground truth FIRST (Phase 5): a live worker owns the
       // port — the port cannot be faked by a stale or clobbered file. Exit 0:
       // duplicate suppression is a success, not a failure.

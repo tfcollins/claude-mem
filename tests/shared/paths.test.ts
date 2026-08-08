@@ -1,7 +1,10 @@
 import { describe, it, expect, afterEach } from 'bun:test';
-import { paths, DATA_DIR, resolveDataDir, expandHome } from '../../src/shared/paths.js';
+import { paths, DATA_DIR, resolveDataDir, expandHome, pinProcessCwd } from '../../src/shared/paths.js';
 import { homedir } from 'os';
 import { join } from 'path';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { spawn } from 'child_process';
 
 describe('paths namespace', () => {
   it('exposes at least the known core accessors', () => {
@@ -91,5 +94,46 @@ describe('resolveDataDir tilde expansion', () => {
   it('still returns a real env-var value when it is already absolute', () => {
     process.env.CLAUDE_MEM_DATA_DIR = sentinel;
     expect(resolveDataDir()).toBe(sentinel);
+  });
+});
+
+describe('pinProcessCwd', () => {
+  // Regression: the worker daemon inherits whatever cwd its launching session
+  // had (often an ephemeral git worktree). If that directory is later deleted
+  // while the daemon keeps running, Bun's spawn() can't resolve the deleted
+  // cwd and throws an ENOENT misattributed to the spawned command itself, not
+  // the missing cwd — the daemon looks like it can't find `claude` when the
+  // real problem is its own working directory no longer exists.
+  it('lets spawn() succeed again after the cwd has been deleted out from under the process', async () => {
+    const originalCwd = process.cwd();
+    const deletedDir = mkdtempSync(join(tmpdir(), 'claude-mem-cwd-test-'));
+    process.chdir(deletedDir);
+    rmSync(deletedDir, { recursive: true, force: true });
+
+    try {
+      pinProcessCwd();
+      // Async spawn, not spawnSync: this suite runs many test files in one
+      // shared process, and a blocking spawnSync can stall other files' async
+      // work enough to trip unrelated timeouts. spawn() proves the same fix
+      // without that side effect.
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(process.execPath, ['--version']);
+        child.on('error', reject);
+        child.on('exit', resolve);
+      });
+      expect(exitCode).toBe(0);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it('leaves the process cwd at DATA_DIR', () => {
+    const originalCwd = process.cwd();
+    try {
+      pinProcessCwd();
+      expect(process.cwd()).toBe(DATA_DIR);
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

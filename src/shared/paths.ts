@@ -74,6 +74,21 @@ export function ensureDir(dirPath: string): void {
   mkdirSync(dirPath, { recursive: true });
 }
 
+/**
+ * Chdir the current process into DATA_DIR (creating it if needed).
+ *
+ * Long-lived daemons (the worker, in particular) otherwise keep whatever cwd
+ * their launching session had — often an ephemeral git worktree. If that
+ * directory is later deleted while the daemon keeps running, Bun's spawn()
+ * can't resolve the deleted cwd and throws an ENOENT misattributed to the
+ * spawned command, not the missing cwd. Pinning to DATA_DIR (which always
+ * exists once created, unlike a session worktree) avoids that failure mode.
+ */
+export function pinProcessCwd(): void {
+  ensureDir(DATA_DIR);
+  process.chdir(DATA_DIR);
+}
+
 export function getPackageRoot(): string {
   return join(_dirname, '..');
 }
