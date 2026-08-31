@@ -43,6 +43,48 @@ export const TOKENS_PER_OBSERVATION = 56_000;
 /** Flat CMEM Pro subscription price, in USD per month. */
 export const CMEM_PRO_MONTHLY_USD = 30;
 
+/** The three trial lengths accepted by cmem.ai's installer funnel. */
+export const CMEM_PRO_TRIAL_LENGTHS = [7, 14, 30] as const;
+export type CmemProTrialDays = (typeof CMEM_PRO_TRIAL_LENGTHS)[number];
+export type CmemProTrialVariant = 'control_7' | 'test_14' | 'test_30';
+
+/** Canonical experiment arm shared with cmem.ai's Stripe metadata. */
+export function cmemProTrialVariant(trialDays: CmemProTrialDays): CmemProTrialVariant {
+  switch (trialDays) {
+    case 7: return 'control_7';
+    case 14: return 'test_14';
+    case 30: return 'test_30';
+    default: throw new Error('trial days must be 7, 14, or 30');
+  }
+}
+
+/** Validate a persisted/API-shaped trial length without coercing other values. */
+export function parseCmemProTrialDays(value: unknown): CmemProTrialDays | null {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^(7|14|30)$/.test(value)
+        ? Number(value)
+        : null;
+
+  return parsed === 7 || parsed === 14 || parsed === 30 ? parsed : null;
+}
+
+/**
+ * The length offered at installer entry; callers carry it through the run.
+ * The 7/14/30 split ran as a test and 30 won, so every run offers 30 — the
+ * other two stay valid on cmem.ai and in parseCmemProTrialDays, we just stop
+ * selecting them. Restoring the split means putting the draw back here.
+ */
+export function pickCmemProTrialDays(): CmemProTrialDays {
+  return 30;
+}
+
+/** Installer-specific offer copy, kept next to the selected duration. */
+export function cmemProTrialPitch(trialDays: CmemProTrialDays): string {
+  return `Get 2x more use out of your Max plan for free (${trialDays}-day trial, $${CMEM_PRO_MONTHLY_USD}/mo)`;
+}
+
 /** claude-mem's measured input/output mix. */
 const INPUT_SHARE = 0.987;
 const OUTPUT_SHARE = 0.013;
@@ -143,13 +185,13 @@ export interface ProviderLabels {
  * The leading text of each label is padded so the parenthesised cost column
  * lines up in the terminal.
  */
-export async function buildProviderLabels(): Promise<ProviderLabels> {
+export async function buildProviderLabels(trialDays: CmemProTrialDays): Promise<ProviderLabels> {
   const { rates, live } = await fetchBlendedRates();
 
   return {
     cmem:
       `CMEM Pro — observer model, off your plan  ($0/1k observations · $${CMEM_PRO_MONTHLY_USD}/mo, cloud sync included)`,
-    cmemHint: `${CMEM_PRO_TRIAL_DAYS} days free, then $${CMEM_PRO_MONTHLY_USD}/mo`,
+    cmemHint: `${trialDays} days free, then $${CMEM_PRO_MONTHLY_USD}/mo`,
     openrouter:
       `OpenRouter / any OpenAI-compatible key    (~$${costPer1kObservations(rates.openrouter)}/1k observations, billed to you)`,
     gemini:
@@ -168,11 +210,13 @@ export async function buildProviderLabels(): Promise<ProviderLabels> {
  */
 const CMEM_PRO_ORIGIN = (process.env.CMEM_PRO_ORIGIN?.trim() || 'https://cmem.ai').replace(/\/+$/, '');
 
-/** Where the installer sends people to buy CMEM Pro. */
-export const CMEM_PRO_SIGNUP_URL = `${CMEM_PRO_ORIGIN}/pro?from=installer`;
+/** Where the installer sends this arm to buy CMEM Pro. */
+export function cmemProSignupUrl(trialDays: CmemProTrialDays): string {
+  return `${CMEM_PRO_ORIGIN}/pro?from=installer&trial=${trialDays}`;
+}
 
 /**
- * The 7-day card-upfront trial funnel (plan 2026-08-08-seven-day-trial-npx-funnel).
+ * The card-upfront trial funnel (plan 2026-08-08-seven-day-trial-npx-funnel).
  *
  * `start` creates the cmem.ai account + emails a sign-in link and answers with
  * a pairing id/secret plus a device-authorization `user_code` the human types
@@ -185,7 +229,6 @@ export const CMEM_PRO_SIGNUP_URL = `${CMEM_PRO_ORIGIN}/pro?from=installer`;
  */
 export const CMEM_PRO_TRIAL_START_URL = `${CMEM_PRO_ORIGIN}/api/pro/trial/start`;
 export const CMEM_PRO_TRIAL_POLL_URL = `${CMEM_PRO_ORIGIN}/api/pro/trial/poll`;
-export const CMEM_PRO_TRIAL_DAYS = 7;
 
 /**
  * CMEM Pro settings, written as a plain `openrouter` provider config: the
