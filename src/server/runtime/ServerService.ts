@@ -260,7 +260,20 @@ export class ServerService {
         this.graph.queueManager.close(),
         this.graph.generationWorkerManager.close(),
       ]);
-      await this.graph.postgres.pool.end();
+      try {
+        await this.graph.postgres.pool.end();
+      } catch (error: unknown) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        // A pool that was already closed by its external owner (test teardown
+        // owns the pool it injects into the graph) or by a racing stop throws
+        // pg's "Called end on pool more than once". Ending an already-closed
+        // pool is a logical no-op, so tolerate it rather than aborting the rest
+        // of shutdown — mirrors the ERR_SERVER_NOT_RUNNING handling above.
+        if (!/Called end on pool more than once/.test(err.message)) {
+          throw error;
+        }
+        logger.warn('SYSTEM', 'Postgres pool was already closed when stop was requested', {}, err);
+      }
     } finally {
       if (this.persistRuntimeState) {
         removeServerState();
